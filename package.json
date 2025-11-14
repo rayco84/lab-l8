@@ -1,0 +1,15 @@
+{
+  "name": "lab-l8",
+  "version": "1.0.0",
+  "description": "Lab L-8: Creating Blockchain-Based Collectible Trading Cards",
+  "main": "index.js",
+  "scripts": {
+    "lars": "lars",
+    "lars:config": "lars config",
+    "start": "lars start",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@bsv/lars": "^1.5.0"
+  }
+}
