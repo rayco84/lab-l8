@@ -26,13 +26,13 @@ const App: React.FC = () => {               // set form state
     const [description, setDescription] = useState('')
     const [rarity, setRarity] = useState('common')
     const [ability, setAbility] = useState('')
-    const [history, setHistory] = useState('')
+  //  const [history, setHistory] = useState('')
     const [sats, setSats] = useState(100)
 
     const [cards, setCards] = useState<CardData[]>([])          // set App state
     const [loading, setLoading] = useState(false)
     const [creating, setCreating] = useState(false)
-    const [redeeming, setRedeeming] = useState(false)
+    const [redeemingIndex, setRedeemingIndex] = useState<number | null>(null)
     const [status, setStatus] = useState('')
 
     const fetchCards = async () => {
@@ -77,7 +77,7 @@ const App: React.FC = () => {               // set form state
                 description: description.trim(),
                 rarity,
                 ability: ability.trim(),
-                history: history.trim(),
+            //    history: history.trim(),
                 sats
             })
 
@@ -85,7 +85,7 @@ const App: React.FC = () => {               // set form state
             setDescription('')
             setRarity('common')
             setAbility('')
-            setHistory('')
+        //    setHistory('')
             setSats(100)
 
             setStatus('Card created successfully!')
@@ -107,7 +107,12 @@ const App: React.FC = () => {               // set form state
             return
         }
 
-        setRedeeming(true)
+        if (card.status === 'redeemed') {      // add already redeemed check & notify
+          setStatus('This card is inactive and cannot be redeemed')
+          return
+        }
+
+        setRedeemingIndex(idx)
         setStatus('Redeeming card...')
 
         try {
@@ -119,7 +124,7 @@ const App: React.FC = () => {               // set form state
             const message = err.message || 'Unknown error'
             setStatus(`Failed to redeem card: ${message}`)
         } finally {
-            setRedeeming(false)
+            setRedeemingIndex(null)
         }
     }
 
@@ -193,7 +198,7 @@ const App: React.FC = () => {               // set form state
             required
           />
 
-          <TextField
+          {/* <TextField
             fullWidth
             label="History (Optional)"
             value={history}
@@ -201,7 +206,7 @@ const App: React.FC = () => {               // set form state
             margin="normal"
             multiline
             rows={2}
-          />
+          /> */}
 
           <TextField
             fullWidth
@@ -256,18 +261,21 @@ const App: React.FC = () => {               // set form state
                         mb: 2,
                         borderRadius: 1,
                         flexDirection: 'column',
-                        alignItems: 'flex-start'
+                        alignItems: 'flex-start',
+                        opacity: card.status === 'redeemed' ? 0.6 : 1     // grey out redeemed cards in display
                       }}
                       secondaryAction={
-                        <Button
-                          variant="outlined"
-                          color="error"
-                          onClick={() => handleRedeem(idx)}
-                          disabled={redeeming}
-                          sx={{ mt: 1 }}
-                        >
-                          {redeeming ? 'Redeeming...' : 'Redeem'}
-                        </Button>
+                        card.status === 'active' && (
+                          <Button
+                            variant="outlined"
+                            color="error"
+                            onClick={() => handleRedeem(idx)}
+                            disabled={redeemingIndex !== null}    // disable while a redemption is happening 
+                            sx={{ mt: 1 }}
+                          >
+                            {redeemingIndex === idx ? 'Redeeming...' : 'Redeem'}   
+                          </Button>
+                        )
                       }
                     >
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, width: '100%' }}>
@@ -279,6 +287,14 @@ const App: React.FC = () => {               // set form state
                             color={rarityColors[card.rarity]}
                             size="small"
                           />
+                          {card.status === 'redeemed' && (    //  add "inactive" display element
+                            <Chip
+                              label="INACTIVE"
+                              color="default"
+                              size="small"
+                              variant="outlined"
+                            />
+                          )}
                         </Box>
 
                         <ListItemText
@@ -290,11 +306,31 @@ const App: React.FC = () => {               // set form state
                         <Typography variant="body2" sx={{ mt: 1 }}>
                           <strong>Ability:</strong> {card.ability}
                         </Typography>
-                        {card.history && (
+
+                        {card.history && card.history.length > 0 && (      // new display for history array eleemnt
+                          <Box sx={{ mt: 1 }}>
+                            <Typography variant="body2">
+                              <strong>History:</strong>
+                            </Typography>
+                            {card.history.map((entry, entryIdx) => (
+                              <Typography
+                                key={entryIdx}
+                                variant="body2"
+                                color="textSecondary"
+                                sx={{ ml: 2, mt: 0.5 }}
+                              >
+                                * {new Date(entry.timestamp).toLocaleString()} - {entry.event}
+                              </Typography>
+                            ))}
+                          </Box>
+                        )}
+
+                        {/* {card.history && (
                           <Typography variant="body2" sx={{ mt: 1 }}>
                             <strong>History:</strong> {card.history}
                           </Typography>
-                        )}
+                        )} */}
+
                         <Typography variant="body2" sx={{ mt: 1 }}>
                           💰 <strong>{card.sats} sats</strong>
                         </Typography>

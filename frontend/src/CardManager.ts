@@ -14,14 +14,22 @@ export interface CardData {
     description: string
     rarity: string
     ability: string
-    history: string
+    history: HistoryEntry[]
     sats: number
     txid: string
     outputIndex: number
     outputScript: string
     keyID: string
+    status: 'active' | 'redeemed'
     envelope?: any
 }
+
+export interface HistoryEntry{
+    timestamp: number
+    event: 'Created' | 'Redeemed' | 'Traded' | 'Upgraded'
+    metadata?: Record<string, any>
+}
+
 
 const PROTOCOL_ID: WalletProtocol = [1, 'card collectibles']
 const BASKET_NAME = 'cards'
@@ -29,20 +37,38 @@ const BASKET_NAME = 'cards'
 const walletClient = new WalletClient('json-api', 'localhost')
 const pushdrop = new PushDrop(walletClient)
 
+
 function generateUniqueKeyID(): string {
     return uuidv4()
 }
 
+function createCreationHistoryEntry(): HistoryEntry {        // helper func to set first history entry (created)
+    return {
+        timestamp: Date.now(),
+        event: 'Created'
+    }    
+}
+function createRedemptionHistoryEntry(): HistoryEntry {     // helper func to set last history entry (redeemed)
+    return {
+        timestamp: Date.now(),
+        event: 'Redeemed'
+    }
+} 
+
+
 export async function createCard(
     card: Omit<
         CardData,
-        'txid' | 'outputIndex' | 'outputScript' | 'envelope' | 'keyID'
+        'txid' | 'outputIndex' | 'outputScript' | 'envelope' | 'keyID' | 'history' | 'status'
     >,
     testWerrLabel = false
 ): Promise<void> {
     try {
         const keyID = generateUniqueKeyID()   //gen unique key
-        
+
+        const initialHistory = createCreationHistoryEntry()     // declare history array and first entry
+        const historyArray = [initialHistory]
+
         const cardAttributes = {  // card deets in json
             name: card.name,
             description: card.description,
@@ -68,7 +94,8 @@ export async function createCard(
                 basket: BASKET_NAME,
                 customInstructions: JSON.stringify({
                     keyID,
-                    history: card.history
+                    history: historyArray,
+                    status: 'active'
                 })
             }],
             description: `Create card: ${card.name}`,
@@ -147,30 +174,33 @@ export async function loadCards(): Promise<CardData[]> {
                     const attributesJSON = Utils.toUTF8(encodedAttributes) // parse json string
                     const attributes = JSON.parse(attributesJSON)
 
-                    let keyID = ''  // extract keyID & history and accoutn for erros/null
-                    let history = ''
+                    let keyID = ''  // extract keyID, history, and status + account for erros/null
+                    let historyArray: HistoryEntry[] = []
+                    let status: 'active' | 'redeemed' = 'active'
 
                     if (entry.customInstructions) {
                         try {
                             const instructions = JSON.parse(entry.customInstructions)
                             keyID = instructions.keyID || ''
-                            history = instructions.history || ''
+                            historyArray = instructions.history || []   // refactor history & add status
+                            status = instructions.status || 'active'
                         } catch (e) {
                             console.warn('[loadCards] Failed to parse customInstructions:', e)
                         }
                     }
 
-                    const cardData: CardData = {  // build card-data obj
+                    const cardData: CardData = {  // build card-data obj (refactor history & add status)
                         name: attributes.name,
                         description: attributes.description,
                         rarity: attributes.rarity,
                         ability: attributes.ability,
-                        history: history,
+                        history: historyArray,
                         sats: entry.satoshis,
                         txid: txid,
                         outputIndex: outputIndex,
                         outputScript: lockingScript.toHex(),
-                        keyID: keyID
+                        keyID: keyID,
+                        status: status
                     }
 
                     console.log('[loadCards] Loaded card:', cardData.name)
@@ -217,6 +247,7 @@ export async function redeemCard(card: CardData): Promise<void> {
 
         if (!BEEF) throw new Error('BEEF data not found for transaction')
 
+        const updatedHistory = [...card.history, createRedemptionHistoryEntry()]   // when redeemed -> add to history
         const lockingScript = LockingScript.fromHex(card.outputScript)
 
         const unlocker = pushdrop.unlock(
@@ -239,6 +270,19 @@ export async function redeemCard(card: CardData): Promise<void> {
                     inputDescription: 'Collectable card token'
                 }
             ],
+            outputs: [          // redemption outputs
+                {
+                    lockingScript: lockingScript.toHex(),
+                    satoshis: card.sats,
+                    outputDescription: 'Redeemed collectable card token',
+                    basket: BASKET_NAME,
+                    customInstructions: JSON.stringify({
+                        keyID: card.keyID,
+                        history: updatedHistory,
+                        status: 'redeemed'
+                    })
+                }
+            ],
             options: {
                 randomizeOutputs: false,
                 acceptDelayedBroadcast: false
@@ -257,7 +301,7 @@ export async function redeemCard(card: CardData): Promise<void> {
                     unlockingScript: unlockingScript.toHex()
                 }
             }
-    })
+        })
 
         console.log('[redeemCard] Card redeemed successfully:', card.name)
 
