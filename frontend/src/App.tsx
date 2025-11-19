@@ -517,29 +517,23 @@ const App: React.FC = () => {               // set form state
                               }
 
                               if (entry.event === 'Traded' && entry.metadata) {       // trading event
-                                const isBuyer = entry.metadata.tradedTo === card.keyID
-                                const counterpartyKeyID = isBuyer
-                                  ? entry.metadata.tradedFrom
-                                  : entry.metadata.tradedTo
-                                const actionText = isBuyer ? 'Bought from Seller' : 'Sold to Buyer'
-
-                                return (
-                                  <Box key={entryIdx} sx={{ ml: 2, mt: 0.5 }}>
-                                    <Typography variant="body2" color="textSecondary">
-                                      • Traded - {formattedDate}
+                              return (
+                                <Box key={entryIdx} sx={{ ml: 2, mt: 0.5 }}>
+                                  <Typography variant="body2" color="textSecondary">
+                                    • Traded - {formattedDate}
+                                  </Typography>
+                                  {entry.metadata.tradedTo && entry.metadata.price !== undefined && (
+                                    <Typography
+                                      variant="body2"
+                                      color="textSecondary"
+                                      sx={{ ml: 2 }}
+                                    >
+                                      Sold to Buyer: {entry.metadata.tradedTo.substring(0, 8)}... for {entry.metadata.price} sats
                                     </Typography>
-                                    {counterpartyKeyID && entry.metadata.price !== undefined && (
-                                      <Typography
-                                        variant="body2"
-                                        color="textSecondary"
-                                        sx={{ ml: 2 }}
-                                      >
-                                        {actionText}: {counterpartyKeyID.substring(0, 8)}... for {entry.metadata.price} sats
-                                      </Typography>
-                                    )}
-                                  </Box>
-                                )
-                              }
+                                  )}
+                                </Box>
+                              )
+                            }
                             return (                             // fallback for any ohter 'event's
                               <Typography
                                 key={entryIdx}
