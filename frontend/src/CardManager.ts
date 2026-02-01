@@ -20,14 +20,20 @@ export interface CardData {
     outputIndex: number
     outputScript: string
     keyID: string
-    status: 'active' | 'redeemed'
+    status: 'active' | 'redeemed' | 'traded'
     envelope?: any
+    beef?: number[]
 }
 
 export interface HistoryEntry{
     timestamp: number
     event: 'Created' | 'Redeemed' | 'Traded' | 'Upgraded'
-    metadata?: Record<string, any>
+    metadata?: {
+        tradedFrom?: string
+        tradedTo?: string
+        price?: number
+        [key: string]: any
+    }
 }
 
 
@@ -55,11 +61,26 @@ function createRedemptionHistoryEntry(): HistoryEntry {     // helper func to se
     }
 } 
 
+function createTradeHistoryEntry(
+    fromKeyID: string,
+    toKeyID: string,
+    price: number
+): HistoryEntry {
+    return {
+        timestamp: Date.now(),
+        event: 'Traded',
+        metadata: {
+            tradedFrom: fromKeyID,
+            tradedTo: toKeyID,
+            price: price
+        }
+    }
+}
 
 export async function createCard(
     card: Omit<
         CardData,
-        'txid' | 'outputIndex' | 'outputScript' | 'envelope' | 'keyID' | 'history' | 'status'
+        'txid' | 'outputIndex' | 'outputScript' | 'envelope' | 'keyID' | 'history' | 'status' | 'beef'
     >,
     testWerrLabel = false
 ): Promise<void> {
@@ -101,7 +122,7 @@ export async function createCard(
             description: `Create card: ${card.name}`,
             options: {
                 randomizeOutputs: false,
-                acceptDelayedBroadcast: false
+                acceptDelayedBroadcast: true
             }
         })
 
@@ -147,7 +168,8 @@ export async function loadCards(): Promise<CardData[]> {
         const { outputs, BEEF } = await walletClient.listOutputs({
             basket: BASKET_NAME,
             include: 'entire transactions',
-            includeCustomInstructions: true
+            includeCustomInstructions: true,
+            limit: 1000
         })
 
         console.log('[loadCards] Retreived outputs:', outputs.length)
@@ -176,13 +198,13 @@ export async function loadCards(): Promise<CardData[]> {
 
                     let keyID = ''  // extract keyID, history, and status + account for erros/null
                     let historyArray: HistoryEntry[] = []
-                    let status: 'active' | 'redeemed' = 'active'
+                    let status: 'active' | 'redeemed' | 'traded' = 'active'
 
                     if (entry.customInstructions) {
                         try {
                             const instructions = JSON.parse(entry.customInstructions)
                             keyID = instructions.keyID || ''
-                            historyArray = instructions.history || []   // refactor history & add status
+                            historyArray = Array.isArray(instructions.history) ? instructions.history : []   // refactor history & add status
                             status = instructions.status || 'active'
                         } catch (e) {
                             console.warn('[loadCards] Failed to parse customInstructions:', e)
@@ -200,7 +222,8 @@ export async function loadCards(): Promise<CardData[]> {
                         outputIndex: outputIndex,
                         outputScript: lockingScript.toHex(),
                         keyID: keyID,
-                        status: status
+                        status: status,
+                        beef: BEEF
                     }
 
                     console.log('[loadCards] Loaded card:', cardData.name)
@@ -237,40 +260,47 @@ export async function loadCards(): Promise<CardData[]> {
 }
 
 export async function redeemCard(card: CardData): Promise<void> {
-    console.log('[redemmCard] Redeeming card:', card.name)
+        console.log('[redemmCard] Redeeming card:', card.name)
 
-    try { // fetch card and parse retun data
-        const { BEEF } = await walletClient.listOutputs({
-            basket: BASKET_NAME,
-            include: 'entire transactions'
-        })
+    try {
+        const BEEF = card.beef
+        if (!BEEF) throw new Error('BEEF data not found on card')
 
-        if (!BEEF) throw new Error('BEEF data not found for transaction')
+        const updatedHistory = [...card.history, createRedemptionHistoryEntry()]
 
-        const updatedHistory = [...card.history, createRedemptionHistoryEntry()]   // when redeemed -> add to history
-        const lockingScript = LockingScript.fromHex(card.outputScript)
+        const originalLockingScript = LockingScript.fromHex(card.outputScript)
+        const decoded = PushDrop.decode(originalLockingScript)
+        const cardAttributesBytes = decoded.fields[0]
+
+        const lockingScript = await pushdrop.lock(
+            [cardAttributesBytes],
+            PROTOCOL_ID,
+            card.keyID,
+            'self',
+            true
+        )
 
         const unlocker = pushdrop.unlock(
             PROTOCOL_ID,
             card.keyID,
-            'self',  // unlock my own card
-            'all',  // all fields
-            false, // lockBit si false bc we're UNLOCKing
+            'self',
+            'all',
+            false,
             card.sats,
             lockingScript
         )
 
-        const partial = await walletClient.createAction({            // call Action with returned outputs
+        const partial = await walletClient.createAction({
             description: `Redeem card: ${card.name}`,
             inputBEEF: BEEF,
             inputs: [
                 {
                     outpoint: `${card.txid}.${card.outputIndex}`,
-                    unlockingScriptLength: 73,
+                    unlockingScriptLength: 250,
                     inputDescription: 'Collectable card token'
                 }
             ],
-            outputs: [          // redemption outputs
+            outputs: [
                 {
                     lockingScript: lockingScript.toHex(),
                     satoshis: card.sats,
@@ -285,19 +315,19 @@ export async function redeemCard(card: CardData): Promise<void> {
             ],
             options: {
                 randomizeOutputs: false,
-                acceptDelayedBroadcast: false
+                acceptDelayedBroadcast: true
             }
         })
 
-        const unlockingScript = await unlocker.sign(                // sign & submit 
+        const unlockingScript = await unlocker.sign(
             Transaction.fromBEEF(partial.signableTransaction!.tx),
-            card.outputIndex
+            0
         )
 
         await walletClient.signAction({
             reference: partial.signableTransaction!.reference,
             spends: {
-                [card.outputIndex]: {
+                0: {
                     unlockingScript: unlockingScript.toHex()
                 }
             }
@@ -305,7 +335,7 @@ export async function redeemCard(card: CardData): Promise<void> {
 
         console.log('[redeemCard] Card redeemed successfully:', card.name)
 
-    } catch (err: unknown) {                                        // handle all errors pattern
+    } catch (err: unknown) {
         if (err instanceof WERR_REVIEW_ACTIONS) {
             console.error('[redeemCard] Wallet threw WERR_REVIEW_ACTIONS:', {
                 code: err.code,
@@ -326,7 +356,6 @@ export async function redeemCard(card: CardData): Promise<void> {
         } else {
             console.error('[redeemCard] Redemption failed with unknown error:', err)
         }
-        
         throw err
     }
   // TODO: Implement the logic to redeem a collectible card token:
@@ -338,3 +367,127 @@ export async function redeemCard(card: CardData): Promise<void> {
   // 6. Handle errors, including WERR_REVIEW_ACTIONS, and log detailed error information.
 }
 
+export async function tradeCard(
+    card: CardData,
+    newOwnerKeyID: string,
+    price: number
+): Promise<void> {
+    console.log('[tradeCard] Trading card:', card.name, 'to:', newOwnerKeyID)
+
+    try {
+        const BEEF = card.beef
+        if (!BEEF) throw new Error('BEEF data not found on card')
+
+        const tradeEntry = createTradeHistoryEntry(card.keyID, newOwnerKeyID, price)
+        const updatedHistory = [...card.history, tradeEntry]
+
+        const originalLockingScript = LockingScript.fromHex(card.outputScript)
+        const decoded = PushDrop.decode(originalLockingScript)
+        const cardAttributesBytes = decoded.fields[0]
+
+        const sellerLockingScript = await pushdrop.lock(
+            [cardAttributesBytes],
+            PROTOCOL_ID,
+            card.keyID,
+            'self',
+            true
+        )
+
+        const buyerLockingScript = await pushdrop.lock(
+            [cardAttributesBytes],
+            PROTOCOL_ID,
+            newOwnerKeyID,
+            'self',
+            true
+        )
+
+        const unlocker = pushdrop.unlock(
+            PROTOCOL_ID,
+            card.keyID,
+            'self',
+            'all',
+            false,
+            card.sats,
+            originalLockingScript
+        )
+
+        const partial = await walletClient.createAction({
+            description: `Trade card: ${card.name}`,
+            inputBEEF: BEEF,
+            inputs: [
+                {
+                    outpoint: `${card.txid}.${card.outputIndex}`,
+                    unlockingScriptLength: 250,
+                    inputDescription: 'Trading collectable card token'
+                }
+            ],
+            outputs: [
+                {
+                    lockingScript: sellerLockingScript.toHex(),
+                    satoshis: 1,
+                    outputDescription: 'Sold card receipt',
+                    basket: BASKET_NAME,
+                    customInstructions: JSON.stringify({
+                        keyID: card.keyID,
+                        history: updatedHistory,
+                        status: 'traded'
+                    })
+                },
+                {
+                    lockingScript: buyerLockingScript.toHex(),
+                    satoshis: card.sats - 1,
+                    outputDescription: 'Traded collectable card token',
+                    basket: BASKET_NAME,
+                    customInstructions: JSON.stringify({
+                        keyID: newOwnerKeyID,
+                        history: updatedHistory,
+                        status: 'active'
+                    })
+                }
+            ],
+            options: {
+                randomizeOutputs: false,
+                acceptDelayedBroadcast: true
+            }
+        })
+
+        const unlockingScript = await unlocker.sign(
+            Transaction.fromBEEF(partial.signableTransaction!.tx),
+            0
+        )
+
+        await walletClient.signAction({
+            reference: partial.signableTransaction!.reference,
+            spends: {
+                0: {
+                    unlockingScript: unlockingScript.toHex()
+                }
+            }
+        })
+
+        console.log('[tradeCard] Card traded successfully:', card.name)
+
+    } catch (err: unknown) {
+        if (err instanceof WERR_REVIEW_ACTIONS) {
+            console.error('[tradeCard] Wallet threw WERR_REVIEW_ACTIONS:', {
+                code: err.code,
+                message: err.message,
+                reviewActionResults: err.reviewActionResults,
+                sendWithResults: err.sendWithResults,
+                txid: err.txid,
+                tx: err.tx,
+                noSendChange: err.noSendChange
+            })
+        } else if (err instanceof Error) {
+            console.error('[tradeCard] Trading failed with error:', {
+                message: err.message,
+                name: err.name,
+                stack: err.stack,
+                error: err
+            })
+        } else {
+            console.error('[tradeCard] Trading failed with unknown error:', err)
+        }
+        throw err
+    }
+}

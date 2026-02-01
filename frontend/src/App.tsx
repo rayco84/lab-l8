@@ -15,9 +15,10 @@ import {
     CircularProgress,
     Chip,
     ThemeProvider,
-    CssBaseline
+    CssBaseline,
+    Dialog
  } from '@mui/material'
-import { createCard, loadCards, redeemCard, CardData } from './CardManager'
+import { createCard, loadCards, redeemCard, tradeCard, CardData } from './CardManager'
 import web3Theme, { rarityColors } from './Utils/theme'
 import Footer from './Utils/footer'
 
@@ -28,6 +29,20 @@ const App: React.FC = () => {               // set form state
     const [ability, setAbility] = useState('')
   //  const [history, setHistory] = useState('')
     const [sats, setSats] = useState(100)
+    const [tradingIndex, setTradingIndex] = useState<number | null>(null)
+    const [tradeModalOpen, setTradeModalOpen] = useState(false)
+    const [buyerKeyID, setBuyerKeyID] = useState('')
+    const [tradePrice, setTradePrice] = useState(100)
+
+    const getTradeStatus = (card: CardData): 'SOLD' | 'BOUGHT' | null => {
+      const lastTrade = [...card.history]
+         .reverse()
+         .find(entry => entry.event === 'Traded')
+     if (!lastTrade?.metadata) return null
+     if (lastTrade.metadata.tradedFrom === card.keyID) return 'SOLD'
+     if (lastTrade.metadata.tradedTo === card.keyID) return 'BOUGHT'
+     return null
+ }
 
     const [cards, setCards] = useState<CardData[]>([])          // set App state
     const [loading, setLoading] = useState(false)
@@ -127,6 +142,46 @@ const App: React.FC = () => {               // set form state
             setRedeemingIndex(null)
         }
     }
+
+    const handleTrade = async () => {
+    if (tradingIndex === null) return
+    
+    const card = cards[tradingIndex]
+    if (!card) {
+        setStatus('Card not found')
+        return
+    }
+
+    if (!buyerKeyID.trim()) {
+        setStatus('Buyer\'s ID key is required')
+        return
+    }
+    if (tradePrice <= 0) {
+        setStatus('Price must be greater than 0')
+        return
+    }
+
+    setStatus('Executing trade...')
+
+    try {
+        await tradeCard(card, buyerKeyID.trim(), tradePrice)
+        setStatus('Trade successful!')
+
+        setTimeout(() => {
+            setTradeModalOpen(false)
+            setBuyerKeyID('')
+            setTradePrice(100)
+            setTradingIndex(null)
+            setStatus('')
+            fetchCards()
+        }, 2000)
+
+    } catch (err: any) {
+        console.error(err)
+        const message = err.message || 'Unknown'
+        setStatus(`Failed to execute trade: ${message}`)
+    }
+}
 
     useEffect(() => {
         fetchCards()
@@ -239,6 +294,70 @@ const App: React.FC = () => {               // set form state
           </Typography>
         )}
 
+              <Dialog
+        open={tradeModalOpen}
+        onClose={() => {
+          setTradeModalOpen(false)
+          setBuyerKeyID('')
+          setTradePrice(100)
+          setTradingIndex(null)
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
+        <Box sx={{ p: 3, bgcolor: 'background.paper' }}>
+          <Typography variant="h6" gutterBottom>
+            Trade Card
+          </Typography>
+
+          <TextField
+            fullWidth
+            label="BuyerKeyID"
+            value={buyerKeyID}
+            onChange={(e) => setBuyerKeyID(e.target.value)}
+            margin="normal"
+            required
+            placeholder="Enter buyer's keyID"
+          />
+
+          <TextField
+            fullWidth
+            type="number"
+            label="Price (sats)"
+            value={tradePrice}
+            onChange={(e) => setTradePrice(parseInt(e.target.value) || 0)}
+            margin="normal"
+            required
+          />
+
+          <Box sx={{ display: 'flex', gap: 2, mt: 3 }}>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setTradeModalOpen(false)
+                setBuyerKeyID('')
+                setTradePrice(100)
+                setTradingIndex(null)
+              }}
+              fullWidth
+            >
+              Cancel
+            </Button>
+
+            <Button
+              variant="contained"
+              color="primary"
+              onClick={handleTrade}
+              disabled={!buyerKeyID.trim() || tradePrice <= 0}
+              fullWidth
+            >
+              Confirm Trade
+            </Button>
+          </Box>
+        </Box>
+      </Dialog>
+
+
         {loading ? (
           <Box display="flex" justifyContent="center" sx={{ my: 4 }}>
             <CircularProgress />
@@ -262,21 +381,51 @@ const App: React.FC = () => {               // set form state
                         borderRadius: 1,
                         flexDirection: 'column',
                         alignItems: 'flex-start',
-                        opacity: card.status === 'redeemed' ? 0.6 : 1     // grey out redeemed cards in display
+                        opacity: (card.status === 'redeemed' || getTradeStatus(card) === 'SOLD') ? 0.6 : 1     // grey out redeemed cards in display
                       }}
-                      secondaryAction={
-                        card.status === 'active' && (
+                secondaryAction={
+                  (() => {
+                    const tradeStatus = getTradeStatus(card)
+
+                    if (tradeStatus === 'SOLD') {
+                      return (
+                        <Button variant="outlined" disabled={true} sx={{ mt: 1 }}>
+                          SOLD
+                        </Button>
+                      )
+                    }
+
+                    if (card.status === 'active') {
+                      return (
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, mt: 1 }}>
+                          <Button
+                            variant="outlined"
+                            color="primary"
+                            onClick={() => {
+                              setTradingIndex(idx)
+                              setTradeModalOpen(true)
+                            }}
+                            disabled={tradingIndex !== null || redeemingIndex !== null}
+                            fullWidth
+                          >
+                            Trade
+                          </Button>
                           <Button
                             variant="outlined"
                             color="error"
                             onClick={() => handleRedeem(idx)}
-                            disabled={redeemingIndex !== null}    // disable while a redemption is happening 
-                            sx={{ mt: 1 }}
+                            disabled={redeemingIndex !== null || tradingIndex !== null}
+                            fullWidth
                           >
-                            {redeemingIndex === idx ? 'Redeeming...' : 'Redeem'}   
+                            {redeemingIndex === idx ? 'Redeeming...' : 'Redeem'}
                           </Button>
-                        )
-                      }
+                        </Box>
+                      )
+                    }
+
+                    return null
+                  })()
+                }
                     >
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, width: '100%' }}>
                           <Typography variant="h6">
@@ -289,12 +438,35 @@ const App: React.FC = () => {               // set form state
                           />
                           {card.status === 'redeemed' && (    //  add "inactive" display element
                             <Chip
-                              label="INACTIVE"
-                              color="default"
+                              label={card.rarity.toUpperCase()}
+                              color={rarityColors[card.rarity]}
                               size="small"
-                              variant="outlined"
                             />
                           )}
+
+                            {(() => {
+                              const tradeStatus = getTradeStatus(card)
+                              if (tradeStatus) {
+                                return (
+                                  <Chip
+                                    label={tradeStatus}
+                                    color={tradeStatus === 'SOLD' ? 'warning' : 'info'}
+                                    size="small"
+                                    variant="outlined"
+                                  />
+                                )
+                              }
+                              return null
+                            })()}
+
+                            {card.status === 'redeemed' && (
+                              <Chip
+                                label="REDEEMED"
+                                color="default"
+                                size="small"
+                                variant="outlined"
+                              />
+                            )}
                         </Box>
 
                         <ListItemText
@@ -312,25 +484,53 @@ const App: React.FC = () => {               // set form state
                             <Typography variant="body2">
                               <strong>History:</strong>
                             </Typography>
-                            {card.history.map((entry, entryIdx) => (
-                              <Typography
-                                key={entryIdx}
-                                variant="body2"
-                                color="textSecondary"
-                                sx={{ ml: 2, mt: 0.5 }}
-                              >
-                                * {new Date(entry.timestamp).toLocaleString()} - {entry.event}
-                              </Typography>
-                            ))}
+                            {card.history.map((entry, entryIdx) => {
+                              const formattedDate = new Date(entry.timestamp).toLocaleString()
+
+                              if (entry.event === 'Created' || entry.event === 'Redeemed') {
+                                return (
+                                  <Typography
+                                    key={entryIdx}
+                                    variant="body2"
+                                    color="textSecondary"
+                                    sx={{ ml: 2, mt: 0.5 }}
+                                  >
+                                    • {entry.event} - {formattedDate}
+                                  </Typography>
+                                )
+                              }
+
+                              if (entry.event === 'Traded' && entry.metadata) {
+                                const isBuyer = entry.metadata.tradedTo === card.keyID
+                                const counterparty = isBuyer ? entry.metadata.tradedFrom : entry.metadata.tradedTo
+                                const action = isBuyer ? 'Bought from' : 'Sold to'
+                                return (
+                                  <Box key={entryIdx} sx={{ ml: 2, mt: 0.5 }}>
+                                    <Typography variant="body2" color="textSecondary">
+                                      • Traded - {formattedDate}
+                                    </Typography>
+                                    {counterparty && entry.metadata.price !== undefined && (
+                                      <Typography variant="body2" color="textSecondary" sx={{ ml: 2 }}>
+                                        {action}: {counterparty.substring(0, 8)}... for {entry.metadata.price} sats
+                                      </Typography>
+                                    )}
+                                  </Box>
+                                )
+                              }
+
+                              return (
+                                <Typography
+                                  key={entryIdx}
+                                  variant="body2"
+                                  color="textSecondary"
+                                  sx={{ ml: 2, mt: 0.5 }}
+                                >
+                                  • {entry.event} - {formattedDate}
+                                </Typography>
+                              )
+                            })}
                           </Box>
                         )}
-
-                        {/* {card.history && (
-                          <Typography variant="body2" sx={{ mt: 1 }}>
-                            <strong>History:</strong> {card.history}
-                          </Typography>
-                        )} */}
-
                         <Typography variant="body2" sx={{ mt: 1 }}>
                           💰 <strong>{card.sats} sats</strong>
                         </Typography>
