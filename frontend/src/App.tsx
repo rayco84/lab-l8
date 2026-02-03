@@ -18,7 +18,7 @@ import {
     CssBaseline,
     Dialog
  } from '@mui/material'
-import { createCard, loadCards, redeemCard, tradeCard, CardData } from './CardManager'
+import { createCard, loadCards, redeemCard, tradeCard, appendHistoryEntry, CardData } from './CardManager'
 import web3Theme, { rarityColors } from './Utils/theme'
 import Footer from './Utils/footer'
 
@@ -33,6 +33,8 @@ const App: React.FC = () => {               // set form state
     const [tradeModalOpen, setTradeModalOpen] = useState(false)
     const [buyerKeyID, setBuyerKeyID] = useState('')
     const [tradePrice, setTradePrice] = useState(100)
+    const [editingHistoryIndex, setEditingHistoryIndex] = useState<number | null>(null)
+    const [newHistoryText, setNewHistoryText] = useState('')
 
     const getTradeStatus = (card: CardData): 'SOLD' | 'BOUGHT' | null => {
       const lastTrade = [...card.history]
@@ -180,6 +182,33 @@ const App: React.FC = () => {               // set form state
         console.error(err)
         const message = err.message || 'Unknown'
         setStatus(`Failed to execute trade: ${message}`)
+    }
+}
+
+const handleAddHistoryEntry = async (idx: number) => {
+    const card = cards[idx]
+    if (!card) {
+        setStatus('Card not found')
+        return
+    }
+
+    if (!newHistoryText.trim()) {
+        setStatus('History entry cannot be empty')
+        return
+    }
+
+    setStatus('Adding history entry...')
+
+    try {
+        await appendHistoryEntry(card, newHistoryText.trim())
+        setStatus('History entry added successfully!')
+        setEditingHistoryIndex(null)
+        setNewHistoryText('')
+        await fetchCards()
+    } catch (err: any) {
+        console.error(err)
+        const message = err.message || 'Unknown error'
+        setStatus(`Failed to add history entry: ${message}`)
     }
 }
 
@@ -478,12 +507,48 @@ const App: React.FC = () => {               // set form state
                         <Typography variant="body2" sx={{ mt: 1 }}>
                           <strong>Ability:</strong> {card.ability}
                         </Typography>
-
-                        {card.history && card.history.length > 0 && (      // new display for history array eleemnt
+                        {card.history && card.history.length > 0 && (
                           <Box sx={{ mt: 1 }}>
-                            <Typography variant="body2">
-                              <strong>History:</strong>
-                            </Typography>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                              <Typography variant="body2">
+                                <strong>History:</strong>
+                              </Typography>
+                              {card.status === 'active' && editingHistoryIndex !== idx && (
+                                <Button
+                                  size="small"
+                                  onClick={() => setEditingHistoryIndex(idx)}
+                                  sx={{ minWidth: 'auto', p: 0.5 }}
+                                >
+                                  +
+                                </Button>
+                              )}
+                            </Box>
+
+                            {editingHistoryIndex === idx && (
+                              <Box sx={{ ml: 2, mt: 1, display: 'flex', gap: 1 }}>
+                                <TextField
+                                  size="small"
+                                  fullWidth
+                                  placeholder="Add history entry..."
+                                  value={newHistoryText}
+                                  onChange={(e) => setNewHistoryText(e.target.value)}
+                                />
+                                <Button size="small" variant="contained" onClick={() => handleAddHistoryEntry(idx)}>
+                                  Save
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={() => {
+                                    setEditingHistoryIndex(null)
+                                    setNewHistoryText('')
+                                  }}
+                                >
+                                  Cancel
+                                </Button>
+                              </Box>
+                            )}
+
                             {card.history.map((entry, entryIdx) => {
                               const formattedDate = new Date(entry.timestamp).toLocaleString()
 
@@ -515,6 +580,19 @@ const App: React.FC = () => {               // set form state
                                       </Typography>
                                     )}
                                   </Box>
+                                )
+                              }
+
+                              if (entry.event === 'Updated' && entry.metadata?.note) {
+                                return (
+                                  <Typography
+                                    key={entryIdx}
+                                    variant="body2"
+                                    color="textSecondary"
+                                    sx={{ ml: 2, mt: 0.5 }}
+                                  >
+                                    • Updated - {formattedDate}: {entry.metadata.note}
+                                  </Typography>
                                 )
                               }
 

@@ -27,7 +27,7 @@ export interface CardData {
 
 export interface HistoryEntry{
     timestamp: number
-    event: 'Created' | 'Redeemed' | 'Traded' | 'Upgraded'
+    event: 'Created' | 'Redeemed' | 'Traded' | 'Upgraded' | 'Updated'
     metadata?: {
         tradedFrom?: string
         tradedTo?: string
@@ -487,6 +487,112 @@ export async function tradeCard(
             })
         } else {
             console.error('[tradeCard] Trading failed with unknown error:', err)
+        }
+        throw err
+    }
+}
+
+export async function appendHistoryEntry(
+    card: CardData,
+    eventText: string
+): Promise<void> {
+    console.log('[appendHistoryEntry] Adding entry to card:', card.name)
+
+    try {
+        const BEEF = card.beef
+        if (!BEEF) throw new Error('BEEF data not found on card')
+
+        const newEntry: HistoryEntry = {
+            timestamp: Date.now(),
+            event: 'Updated',
+            metadata: {
+                note: eventText
+            }
+        }
+
+        const updatedHistory = [...card.history, newEntry]
+
+        const originalLockingScript = LockingScript.fromHex(card.outputScript)
+        const decoded = PushDrop.decode(originalLockingScript)
+        const cardAttributesBytes = decoded.fields[0]
+
+        const lockingScript = await pushdrop.lock(
+            [cardAttributesBytes],
+            PROTOCOL_ID,
+            card.keyID,
+            'self',
+            true
+        )
+
+        const unlocker = pushdrop.unlock(
+            PROTOCOL_ID,
+            card.keyID,
+            'self',
+            'all',
+            false,
+            card.sats,
+            lockingScript
+        )
+
+        const partial = await walletClient.createAction({
+            description: `Update history for card: ${card.name}`,
+            inputBEEF: BEEF,
+            inputs: [
+                {
+                    outpoint: `${card.txid}.${card.outputIndex}`,
+                    unlockingScriptLength: 250,
+                    inputDescription: 'Updating card history'
+                }
+            ],
+            outputs: [
+                {
+                    lockingScript: lockingScript.toHex(),
+                    satoshis: card.sats,
+                    outputDescription: 'Card with updated history',
+                    basket: BASKET_NAME,
+                    customInstructions: JSON.stringify({
+                        keyID: card.keyID,
+                        history: updatedHistory,
+                        status: card.status
+                    })
+                }
+            ],
+            options: {
+                randomizeOutputs: false,
+                acceptDelayedBroadcast: true
+            }
+        })
+
+        const unlockingScript = await unlocker.sign(
+            Transaction.fromBEEF(partial.signableTransaction!.tx),
+            0
+        )
+
+        await walletClient.signAction({
+            reference: partial.signableTransaction!.reference,
+            spends: {
+                0: {
+                    unlockingScript: unlockingScript.toHex()
+                }
+            }
+        })
+
+        console.log('[appendHistoryEntry] History updated successfully:', card.name)
+
+    } catch (err: unknown) {
+        if (err instanceof WERR_REVIEW_ACTIONS) {
+            console.error('[appendHistoryEntry] Wallet threw WERR_REVIEW_ACTIONS:', {
+                code: err.code,
+                message: err.message
+            })
+        } else if (err instanceof Error) {
+            console.error('[appendHistoryEntry] Failed with error:', {
+                message: err.message,
+                name: err.name,
+                stack: err.stack
+            })
+        } else {
+            console.error('[appendHistoryEntry] Failed with unknown error:', err)
         }
         throw err
     }
